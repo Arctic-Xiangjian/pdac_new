@@ -1,0 +1,42 @@
+bottleneck_depth: 2
+bottleneck_heads: 24
+conv_downsample_first: true
+depths:
+- 2
+- 2
+- 2
+embed_dim: 66
+img_size:
+- 320
+- 320
+logger_type: tb
+lr: 0.0001
+lr_gamma: 0.1
+lr_step_size: 35
+mask_center: true
+max_epoch: 50
+mlp_ratio: 2.0
+no_residual_learning: false
+num_adj_slices: 1
+num_cascades: 8
+num_heads:
+- 3
+- 6
+- 12
+num_list:
+- 174
+- 218
+- 246
+- 266
+- 282
+- 296
+- 308
+- 320
+patch_size: 1
+resi_connection: 1conv
+sens_chans: 16
+sens_pools: 4
+use_checkpoint: false
+use_compile: true
+weight_decay: 0.0
+window_size: 4

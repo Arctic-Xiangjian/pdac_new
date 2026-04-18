@@ -14,3 +14,5 @@
 # Keep minimal project metadata needed to recreate the environment.
 !pyproject.toml
 !uv.lock
+
+!*.yaml
