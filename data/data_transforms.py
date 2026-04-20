@@ -151,12 +151,20 @@ class PDACDataTransform:
             crop_size = (attrs["recon_size"][0], attrs["recon_size"][1])
 
         if self.mask_func:
-            masked_kspace, mask, _ = apply_mask(
-                kspace,
-                self.mask_func,
-                seed=seed,
-                padding=(acq_start, acq_end),
-            )
+            try:
+                masked_kspace, mask, _ = apply_mask(
+                    kspace,
+                    self.mask_func,
+                    seed=seed,
+                    padding=(acq_start, acq_end),
+                )
+            except:
+                masked_kspace, mask = apply_mask(
+                    kspace,
+                    self.mask_func,
+                    seed=seed,
+                    padding=(acq_start, acq_end),
+                )
         else:
             masked_kspace = kspace
             shape = np.array(kspace.shape)

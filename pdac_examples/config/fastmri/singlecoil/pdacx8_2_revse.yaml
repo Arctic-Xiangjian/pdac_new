@@ -5,14 +5,14 @@ resume_from: null
 batch_size: 4
 
 # center-square mask size applied after each cascade
-num_list: [174, 218, 246, 266, 282, 296, 308, 320]
-# num_list: [156, 234, 274, 296, 310, 316, 318, 320]
+# num_list: [174, 218, 246, 266, 282, 296, 308, 320]
+num_list: [14, 16, 18, 20, 26, 42, 88, 320]
 
 # dataset setting
 accelerations:
-- 4
+- 8
 center_fractions:
-- 0.08
+- 0.04
 challenge: singlecoil
 check_val_every_n_epoch: 1
 combine_train_val: False

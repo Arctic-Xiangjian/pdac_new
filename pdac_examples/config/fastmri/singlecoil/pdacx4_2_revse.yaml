@@ -5,8 +5,8 @@ resume_from: null
 batch_size: 4
 
 # center-square mask size applied after each cascade
-num_list: [174, 218, 246, 266, 282, 296, 308, 320]
-# num_list: [156, 234, 274, 296, 310, 316, 318, 320]
+# num_list: [174, 218, 246, 266, 282, 296, 308, 320]
+num_list: [26, 28, 30, 32, 38, 54, 102, 320]
 
 # dataset setting
 accelerations:

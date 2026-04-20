@@ -22,7 +22,7 @@ lr: 0.0001
 lr_gamma: 0.1
 lr_step_size: 35
 weight_decay: 0.0
-max_epochs: 1
+max_epochs: 50
 
 # model setting
 num_cascades: 8
@@ -51,5 +51,5 @@ conv_downsample_first: True
 num_adj_slices: 1
 verbose: True
 use_checkpointing: False
-use_compile: True
-use_bf16: True
+use_compile: False
+use_bf16: False

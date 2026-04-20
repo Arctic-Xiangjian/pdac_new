@@ -264,7 +264,7 @@ def cli_main(args):
     trainer = pl.Trainer(
         **build_trainer_kwargs(
             args,
-            precision="bf16-mixed" if args.use_bf16 else "16-mixed",
+            precision="bf16-mixed" if args.use_bf16 else "16",
             callbacks=callbacks,
             logger=logger,
         )
