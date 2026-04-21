@@ -152,9 +152,27 @@ class StanfordDataModule(pl.LightningDataModule):
         sampler = None
         if self.distributed_sampler:
             if is_train:
-                sampler = torch.utils.data.DistributedSampler(dataset)
+                if torch.distributed.is_available() and torch.distributed.is_initialized():
+                    sampler = torch.utils.data.DistributedSampler(
+                        dataset, shuffle=True
+                    )
+                else:
+                    sampler = torch.utils.data.DistributedSampler(
+                        dataset,
+                        num_replicas=1,
+                        rank=0,
+                        shuffle=True,
+                    )
             else:
-                sampler = fastmri.data.VolumeSampler(dataset)
+                if torch.distributed.is_available() and torch.distributed.is_initialized():
+                    sampler = fastmri.data.VolumeSampler(dataset)
+                else:
+                    sampler = fastmri.data.VolumeSampler(
+                        dataset,
+                        num_replicas=1,
+                        rank=0,
+                        shuffle=True,
+                    )
 
         dataloader = torch.utils.data.DataLoader(
             dataset=dataset,

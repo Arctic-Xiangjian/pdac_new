@@ -83,14 +83,15 @@ class PDACModule_singlecoil(MriModule):
 
     def validation_step(self, batch, batch_idx):
         masked_kspace, mask, target, fname, slice_num, max_value, _, _ = batch
-        output, _, _, _ = self.forward(
-            masked_kspace, mask
-        )
-        target, output = transforms.center_crop_to_smallest(target, output)
-        val_loss = self.loss(
-            output.unsqueeze(1) / max_value[:, None, None, None],
-            target.unsqueeze(1) / max_value[:, None, None, None],
-        )
+        with self._evaluation_autocast_context():
+            output, _, _, _ = self.forward(
+                masked_kspace, mask
+            )
+            target, output = transforms.center_crop_to_smallest(target, output)
+            val_loss = self.loss(
+                output.unsqueeze(1) / max_value[:, None, None, None],
+                target.unsqueeze(1) / max_value[:, None, None, None],
+            )
 
         return {
             "batch_idx": batch_idx,
@@ -104,13 +105,14 @@ class PDACModule_singlecoil(MriModule):
 
     def test_step(self, batch, batch_idx):
         masked_kspace, mask, _, fname, slice_num, _, crop_size = batch
-        output, _, _, _ = self.forward(masked_kspace, mask)
+        with self._evaluation_autocast_context():
+            output, _, _, _ = self.forward(masked_kspace, mask)
 
-        # check for FLAIR 203
-        if output.shape[-1] < crop_size[1]:
-            crop_size = (output.shape[-1], output.shape[-1])
+            # check for FLAIR 203
+            if output.shape[-1] < crop_size[1]:
+                crop_size = (output.shape[-1], output.shape[-1])
 
-        output = transforms.center_crop(output, crop_size)
+            output = transforms.center_crop(output, crop_size)
 
         return {
             "fname": fname,

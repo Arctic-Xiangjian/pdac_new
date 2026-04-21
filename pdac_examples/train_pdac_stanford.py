@@ -202,7 +202,7 @@ def cli_main(args):
         volume_sample_rate=args.volume_sample_rate,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
-        distributed_sampler=False,
+        distributed_sampler=True,
         train_val_seed=args.train_val_seed,
         train_val_split=args.train_val_split,
         num_adj_slices=args.num_adj_slices,

@@ -227,7 +227,7 @@ def cli_main(args):
         use_dataset_cache_file=args.use_dataset_cache_file,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
-        distributed_sampler=(args.challenge == "singlecoil"),
+        distributed_sampler=True,
         combine_train_val=args.combine_train_val,
         train_scanners=args.train_scanners,
         val_scanners=args.val_scanners,

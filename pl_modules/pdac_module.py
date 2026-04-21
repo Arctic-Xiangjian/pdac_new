@@ -4,6 +4,8 @@ import torch
 from fastmri.data import transforms
 from models.humus_net_pdac import HUMUSNet_pdac
 from pl_modules.mri_module import MriModule
+from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 
 
 class PDACModule(MriModule):
@@ -72,6 +74,13 @@ class PDACModule(MriModule):
 
         return loss_rec
 
+    def on_train_epoch_start(self):
+        train_loader = getattr(self.trainer, "train_dataloader", None)
+        for dataloader in self._iter_dataloaders(train_loader):
+            sampler = getattr(dataloader, "sampler", None)
+            if isinstance(sampler, DistributedSampler):
+                sampler.set_epoch(self.current_epoch)
+
     def validation_step(self, batch, batch_idx):
         masked_kspace, mask, target, fname, slice_num, max_value, _, _ = batch
         with self._evaluation_autocast_context():
@@ -127,6 +136,21 @@ class PDACModule(MriModule):
         if experiment is None or not hasattr(experiment, "add_image"):
             return
         experiment.add_image(name, image, global_step=self.current_epoch)
+
+    def _iter_dataloaders(self, dataloader_container):
+        if dataloader_container is None:
+            return
+        if isinstance(dataloader_container, DataLoader):
+            yield dataloader_container
+            return
+        if isinstance(dataloader_container, (list, tuple)):
+            for dataloader in dataloader_container:
+                yield from self._iter_dataloaders(dataloader)
+            return
+
+        nested = getattr(dataloader_container, "loaders", None)
+        if nested is not None:
+            yield from self._iter_dataloaders(nested)
 
     @staticmethod
     def add_model_specific_args(parent_parser):  # pragma: no-cover
