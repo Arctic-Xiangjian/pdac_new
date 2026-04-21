@@ -80,7 +80,7 @@ def build_data_module(cfg):
         volume_sample_rate=cfg["volume_sample_rate"],
         batch_size=1,
         num_workers=4,
-        distributed_sampler=False,
+        distributed_sampler=True,
         combine_train_val=False,
         train_scanners=None,
         val_scanners=None,

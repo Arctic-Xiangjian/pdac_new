@@ -4,6 +4,8 @@ import torch
 from fastmri.data import transforms
 from models.humus_net_pdac_singlecoil import HUMUSNet_pdac_singlecoil
 from pl_modules.mri_module import MriModule
+from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 
 
 class PDACModule_singlecoil(MriModule):
@@ -72,17 +74,23 @@ class PDACModule_singlecoil(MriModule):
 
         return loss_rec
 
+    def on_train_epoch_start(self):
+        train_loader = getattr(self.trainer, "train_dataloader", None)
+        for dataloader in self._iter_dataloaders(train_loader):
+            sampler = getattr(dataloader, "sampler", None)
+            if isinstance(sampler, DistributedSampler):
+                sampler.set_epoch(self.current_epoch)
+
     def validation_step(self, batch, batch_idx):
         masked_kspace, mask, target, fname, slice_num, max_value, _, _ = batch
-        with self._evaluation_autocast_context():
-            output, _, _, _ = self.forward(
-                masked_kspace, mask
-            )
-            target, output = transforms.center_crop_to_smallest(target, output)
-            val_loss = self.loss(
-                output.unsqueeze(1) / max_value[:, None, None, None],
-                target.unsqueeze(1) / max_value[:, None, None, None],
-            )
+        output, _, _, _ = self.forward(
+            masked_kspace, mask
+        )
+        target, output = transforms.center_crop_to_smallest(target, output)
+        val_loss = self.loss(
+            output.unsqueeze(1) / max_value[:, None, None, None],
+            target.unsqueeze(1) / max_value[:, None, None, None],
+        )
 
         return {
             "batch_idx": batch_idx,
@@ -96,20 +104,34 @@ class PDACModule_singlecoil(MriModule):
 
     def test_step(self, batch, batch_idx):
         masked_kspace, mask, _, fname, slice_num, _, crop_size = batch
-        with self._evaluation_autocast_context():
-            output, _, _, _ = self.forward(masked_kspace, mask)
+        output, _, _, _ = self.forward(masked_kspace, mask)
 
-            # check for FLAIR 203
-            if output.shape[-1] < crop_size[1]:
-                crop_size = (output.shape[-1], output.shape[-1])
+        # check for FLAIR 203
+        if output.shape[-1] < crop_size[1]:
+            crop_size = (output.shape[-1], output.shape[-1])
 
-            output = transforms.center_crop(output, crop_size)
+        output = transforms.center_crop(output, crop_size)
 
         return {
             "fname": fname,
             "slice": slice_num,
             "output": output.cpu().numpy(),
         }
+
+    def _iter_dataloaders(self, dataloader_container):
+        if dataloader_container is None:
+            return
+        if isinstance(dataloader_container, DataLoader):
+            yield dataloader_container
+            return
+        if isinstance(dataloader_container, (list, tuple)):
+            for dataloader in dataloader_container:
+                yield from self._iter_dataloaders(dataloader)
+            return
+
+        nested = getattr(dataloader_container, "loaders", None)
+        if nested is not None:
+            yield from self._iter_dataloaders(nested)
 
     def configure_optimizers(self):
         optim = torch.optim.AdamW(
