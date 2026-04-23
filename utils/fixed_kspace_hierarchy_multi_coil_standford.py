@@ -12,9 +12,21 @@ if str(PROJECT_ROOT) not in sys.path:
 from data.stanford.stanford_data import StanfordSliceDataset
 
 if __package__ in (None, ""):
-    from fixed_kspace_hierarchy_multi_coil_common import run_hierarchy_job
+    from fixed_kspace_hierarchy_multi_coil_common import (
+        DEFAULT_CALIBRATION_WINDOW,
+        DEFAULT_NUM_VIRTUAL_COILS,
+        DEFAULT_REPRESENTATION,
+        REPRESENTATION_CHOICES,
+        run_hierarchy_job,
+    )
 else:
-    from .fixed_kspace_hierarchy_multi_coil_common import run_hierarchy_job
+    from .fixed_kspace_hierarchy_multi_coil_common import (
+        DEFAULT_CALIBRATION_WINDOW,
+        DEFAULT_NUM_VIRTUAL_COILS,
+        DEFAULT_REPRESENTATION,
+        REPRESENTATION_CHOICES,
+        run_hierarchy_job,
+    )
 
 
 DEFAULT_DATA_ROOT = "/working2/arctic/Recon/stanford_convert/"
@@ -67,6 +79,22 @@ def build_args() -> argparse.Namespace:
     parser.add_argument("--tau-abs", type=float, default=None)
     parser.add_argument("--block-size-gram", type=int, default=256)
     parser.add_argument("--block-size-center", type=int, default=512)
+    parser.add_argument(
+        "--representation",
+        type=str,
+        default=DEFAULT_REPRESENTATION,
+        choices=REPRESENTATION_CHOICES,
+    )
+    parser.add_argument(
+        "--num-virtual-coils",
+        type=int,
+        default=DEFAULT_NUM_VIRTUAL_COILS,
+    )
+    parser.add_argument(
+        "--calibration-window",
+        type=int,
+        default=DEFAULT_CALIBRATION_WINDOW,
+    )
     return parser.parse_args()
 
 
@@ -92,6 +120,9 @@ def main() -> None:
         tau_abs=args.tau_abs,
         block_size_gram=args.block_size_gram,
         block_size_center=args.block_size_center,
+        representation=args.representation,
+        num_virtual_coils=args.num_virtual_coils,
+        calibration_window=args.calibration_window,
         metadata={
             "data_root": str(args.data_root),
             "dataset_name": "stanford",
@@ -99,7 +130,12 @@ def main() -> None:
             "data_partition": "train",
             "train_val_split": float(args.train_val_split),
             "train_val_seed": int(args.train_val_seed),
-            "source": "reconstruction_rss",
+            "source": "raw_kspace"
+            if args.representation == DEFAULT_REPRESENTATION
+            else "reconstruction_rss",
+            "representation": str(args.representation),
+            "num_virtual_coils": int(args.num_virtual_coils),
+            "calibration_window": int(args.calibration_window),
         },
     )
 

@@ -1,12 +1,12 @@
 data_path: /working2/arctic/Recon/stanford_convert/
 default_root_dir: ./experiments/standford2d_pdac_dymodel/
-resume_from: null
+resume_from: /working2/arctic/pdac_new/experiments/standford2d_pdac_dymodel/lightning_logs/version_7/checkpoints/last.ckpt
 
 batch_size: 1
 
 # center-square mask size applied after each cascade
-num_list: [160, 224, 268, 302, 328, 350, 368, 384]
-# num_list: [50, 106, 188, 274, 330, 360, 376, 384]
+# num_list: [160, 224, 268, 302, 328, 350, 368, 384]
+num_list: [50, 106, 188, 274, 330, 360, 376, 384]
 
 # dataset setting
 accelerations:
@@ -18,11 +18,11 @@ check_val_every_n_epoch: 1
 mask_type: random
 
 # training setting
-lr: 0.0001
+lr: 5.0e-5
 lr_gamma: 0.1
-lr_step_size: 45
+lr_step_size: 80
 weight_decay: 0.0
-max_epochs: 50
+max_epochs: 100
 
 # model setting
 num_cascades: 8
@@ -38,7 +38,7 @@ weight_decay: 0.0
 embed_dim: 66
 patch_size: 1
 window_size: 8
-depths: 
+depths:
 - 2
 - 2
 - 2

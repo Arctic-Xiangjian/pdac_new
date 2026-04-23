@@ -198,8 +198,6 @@ def cli_main(args):
         )
     else:
         raise ValueError('Challenge should be multicoil or singlecoil.')
-    model._apply_compile_if_requested()
-    
     # ------------
     # data
     # ------------

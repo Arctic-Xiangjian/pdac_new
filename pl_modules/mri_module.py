@@ -131,6 +131,11 @@ class MriModule(pl.LightningModule):
         if isinstance(checkpoint.get("state_dict"), dict):
             checkpoint["state_dict"] = sanitize_state_dict_keys(checkpoint["state_dict"])
 
+    def on_fit_start(self):
+        super().on_fit_start()
+        # Delay torch.compile until after Lightning has restored any checkpoint.
+        self._apply_compile_if_requested()
+
     def _get_num_validation_batches(self) -> int:
         val_dataloaders = getattr(self.trainer, "val_dataloaders", None)
         if val_dataloaders:

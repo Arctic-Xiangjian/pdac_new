@@ -176,8 +176,6 @@ def cli_main(args):
         max_epoch=args.max_epochs,
         logger_type=args.logger_type,
     )
-    model._apply_compile_if_requested()
-    
     # ------------
     # data
     # ------------
