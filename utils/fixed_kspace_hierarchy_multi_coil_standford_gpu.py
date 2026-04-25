@@ -12,7 +12,8 @@ if str(PROJECT_ROOT) not in sys.path:
 from data.stanford.stanford_data import StanfordSliceDataset
 
 if __package__ in (None, ""):
-    from fixed_kspace_hierarchy_multi_coil_common import (
+    from fixed_kspace_hierarchy_multi_coil_common_gpu import (
+        CACHE_MODE_CHOICES,
         DEFAULT_CALIBRATION_WINDOW,
         DEFAULT_NUM_VIRTUAL_COILS,
         DEFAULT_REPRESENTATION,
@@ -22,7 +23,8 @@ if __package__ in (None, ""):
         run_hierarchy_job,
     )
 else:
-    from .fixed_kspace_hierarchy_multi_coil_common import (
+    from .fixed_kspace_hierarchy_multi_coil_common_gpu import (
+        CACHE_MODE_CHOICES,
         DEFAULT_CALIBRATION_WINDOW,
         DEFAULT_NUM_VIRTUAL_COILS,
         DEFAULT_REPRESENTATION,
@@ -35,17 +37,17 @@ else:
 
 DEFAULT_DATA_ROOT = "/working2/arctic/Recon/stanford_convert/"
 DEFAULT_OUTPUT_PREFIX = (
-    Path(__file__).resolve().parent / "gamma_stanford_multicoil_384_raw"
+    Path(__file__).resolve().parent / "gamma_stanford_multicoil_384_raw_gpu"
 )
-DEFAULT_TMP_DIR = "/tmp/cov_rank_stanford_multicoil_384"
+DEFAULT_TMP_DIR = "/tmp/cov_rank_stanford_multicoil_384_gpu"
 
 
 def build_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Compute raw fixed k-space hierarchy statistics for Stanford multi-coil data."
+        description="Compute raw fixed k-space hierarchy statistics for Stanford multi-coil data on GPU."
     )
     parser.add_argument("--data-root", type=str, default=DEFAULT_DATA_ROOT)
-    parser.add_argument("--num-samples", type=int, default=1024*4)
+    parser.add_argument("--num-samples", type=int, default=1024 * 4)
     parser.add_argument(
         "--uniform-train-resolution", nargs=2, type=int, default=[384, 384]
     )
@@ -81,7 +83,7 @@ def build_args() -> argparse.Namespace:
     )
     parser.add_argument("--tau-ratio", type=float, default=1.0)
     parser.add_argument("--tau-abs", type=float, default=None)
-    parser.add_argument("--block-size-gram", type=int, default=256)
+    parser.add_argument("--block-size-gram", type=int, default=1024)
     parser.add_argument("--block-size-center", type=int, default=512)
     parser.add_argument(
         "--representation",
@@ -104,6 +106,14 @@ def build_args() -> argparse.Namespace:
         type=int,
         default=DEFAULT_CALIBRATION_WINDOW,
     )
+    parser.add_argument("--device", type=str, default="cuda:0")
+    parser.add_argument(
+        "--cache-mode",
+        type=str,
+        default="auto",
+        choices=CACHE_MODE_CHOICES,
+    )
+    parser.add_argument("--gpu-cache-max-gb", type=float, default=60.0)
     return parser.parse_args()
 
 
@@ -135,7 +145,7 @@ def main() -> None:
 
     run_hierarchy_job(
         dataset=dataset,
-        dataset_tag="stanford_multicoil_384",
+        dataset_tag="stanford_multicoil_384_gpu",
         output_prefix=args.output_prefix,
         tmp_dir=args.tmp_dir,
         num_samples=args.num_samples,
@@ -149,6 +159,9 @@ def main() -> None:
         representation=args.representation,
         num_virtual_coils=num_virtual_coils,
         calibration_window=args.calibration_window,
+        device=args.device,
+        cache_mode=args.cache_mode,
+        gpu_cache_max_gb=args.gpu_cache_max_gb,
         metadata={
             "data_root": str(args.data_root),
             "dataset_name": "stanford",

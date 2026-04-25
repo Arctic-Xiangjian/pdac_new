@@ -16,7 +16,9 @@ if __package__ in (None, ""):
         DEFAULT_CALIBRATION_WINDOW,
         DEFAULT_NUM_VIRTUAL_COILS,
         DEFAULT_REPRESENTATION,
+        RAW_COIL_REPRESENTATION,
         REPRESENTATION_CHOICES,
+        infer_max_available_kspace_coils,
         run_hierarchy_job,
     )
 else:
@@ -24,7 +26,9 @@ else:
         DEFAULT_CALIBRATION_WINDOW,
         DEFAULT_NUM_VIRTUAL_COILS,
         DEFAULT_REPRESENTATION,
+        RAW_COIL_REPRESENTATION,
         REPRESENTATION_CHOICES,
+        infer_max_available_kspace_coils,
         run_hierarchy_job,
     )
 
@@ -80,13 +84,17 @@ def build_args() -> argparse.Namespace:
     parser.add_argument(
         "--representation",
         type=str,
-        default=DEFAULT_REPRESENTATION,
+        default=RAW_COIL_REPRESENTATION,
         choices=REPRESENTATION_CHOICES,
     )
     parser.add_argument(
         "--num-virtual-coils",
         type=int,
-        default=DEFAULT_NUM_VIRTUAL_COILS,
+        default=None,
+        help=(
+            "Number of output coil channels. Defaults to the maximum available "
+            "coil count in the fastMRI dataset for raw/virtual-coil representations."
+        ),
     )
     parser.add_argument(
         "--calibration-window",
@@ -103,6 +111,23 @@ def main() -> None:
         challenge="multicoil",
         transform=None,
     )
+    if args.num_virtual_coils is None and args.representation != "rss_pseudo":
+        num_virtual_coils = infer_max_available_kspace_coils(dataset)
+        num_virtual_coils_source = "max_available_kspace_coils"
+        print(
+            "[*] Auto output coil channels from max available k-space coils: "
+            f"{num_virtual_coils}"
+        )
+    else:
+        num_virtual_coils = (
+            DEFAULT_NUM_VIRTUAL_COILS
+            if args.num_virtual_coils is None
+            else int(args.num_virtual_coils)
+        )
+        num_virtual_coils_source = (
+            "default_unused" if args.num_virtual_coils is None else "cli"
+        )
+
     run_hierarchy_job(
         dataset=dataset,
         dataset_tag="fastmri_multicoil_384",
@@ -117,17 +142,19 @@ def main() -> None:
         block_size_gram=args.block_size_gram,
         block_size_center=args.block_size_center,
         representation=args.representation,
-        num_virtual_coils=args.num_virtual_coils,
+        num_virtual_coils=num_virtual_coils,
         calibration_window=args.calibration_window,
         metadata={
             "data_root": str(args.data_root),
             "dataset_name": "fastmri",
             "challenge": "multicoil",
-            "source": "raw_kspace"
-            if args.representation == DEFAULT_REPRESENTATION
-            else "reconstruction_rss",
+            "source": "reconstruction_rss"
+            if args.representation == "rss_pseudo"
+            else "raw_kspace",
             "representation": str(args.representation),
-            "num_virtual_coils": int(args.num_virtual_coils),
+            "num_virtual_coils": int(num_virtual_coils),
+            "num_coils": int(num_virtual_coils),
+            "num_virtual_coils_source": num_virtual_coils_source,
             "calibration_window": int(args.calibration_window),
         },
     )

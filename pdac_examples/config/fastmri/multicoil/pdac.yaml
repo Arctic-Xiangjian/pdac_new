@@ -1,11 +1,12 @@
 data_path: /v/ai/nobackup/arctic/public_lowlevel/data/fastMRI/knee/
 default_root_dir: ./experiments/fastmri_pdac/multicoil
-resume_from: null
+resume_from: /working2/arctic/pdac_new/experiments/fastmri_pdac/multicoil/lightning_logs/version_3/checkpoints/last.ckpt
 batch_size: 4
 
 # center-square mask size applied after each cascade
 # num_list: [170, 232, 274, 304, 328, 348, 368, 384]
 num_list: [90, 170, 254, 310, 342, 366, 378, 384]
+# num_list: [18, 20, 22, 24, 26, 34, 76, 384]
 
 # dataset setting
 accelerations:

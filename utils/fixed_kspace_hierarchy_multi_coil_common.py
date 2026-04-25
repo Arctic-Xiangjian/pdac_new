@@ -17,7 +17,8 @@ from tqdm import tqdm
 EPS = 1e-12
 DEFAULT_UNIFORM_TRAIN_RESOLUTION = (384, 384)
 DEFAULT_REPRESENTATION = "virtual_coil_pca"
-REPRESENTATION_CHOICES = (DEFAULT_REPRESENTATION, "rss_pseudo")
+RAW_COIL_REPRESENTATION = "raw_coil"
+REPRESENTATION_CHOICES = (DEFAULT_REPRESENTATION, RAW_COIL_REPRESENTATION, "rss_pseudo")
 DEFAULT_NUM_VIRTUAL_COILS = 4
 DEFAULT_CALIBRATION_WINDOW = 64
 
@@ -38,6 +39,48 @@ def _normalize_positive_int(name: str, value: int) -> int:
     if normalized <= 0:
         raise ValueError(f"{name} must be positive, got {value!r}")
     return normalized
+
+
+def _kspace_shape_num_coils(shape: Sequence[int]) -> int:
+    if len(shape) in (2, 3):
+        return 1
+    if len(shape) >= 4:
+        return int(shape[1])
+    raise ValueError(f"Expected k-space shape with at least 2 dims, got {tuple(shape)}")
+
+
+def infer_max_available_kspace_coils(dataset) -> int:
+    raw_samples = getattr(dataset, "raw_samples", None)
+    num_adj_slices = _normalize_positive_int(
+        "num_adj_slices",
+        int(getattr(dataset, "num_adj_slices", 1) or 1),
+    )
+
+    max_coils = 0
+    if raw_samples is not None:
+        sample_paths = sorted({Path(sample[0]) for sample in raw_samples})
+        if sample_paths:
+            import h5py
+
+            for sample_path in sample_paths:
+                with h5py.File(sample_path, "r") as hf:
+                    if "kspace" not in hf:
+                        raise KeyError(f"{sample_path} does not contain a 'kspace' dataset")
+                    coil_count = _kspace_shape_num_coils(hf["kspace"].shape)
+                    max_coils = max(
+                        max_coils,
+                        coil_count * num_adj_slices,
+                    )
+            if max_coils > 0:
+                return max_coils
+
+    for idx in range(len(dataset)):
+        sample = dataset[idx]
+        max_coils = max(max_coils, int(_raw_kspace_to_tensor(sample[0]).shape[0]))
+
+    if max_coils <= 0:
+        raise ValueError("Could not infer a positive k-space coil count from dataset.")
+    return max_coils
 
 
 def _normalize_even_window(
@@ -231,6 +274,35 @@ def _build_virtual_coil_representation(
     return torch.view_as_real(padded)
 
 
+def _build_raw_coil_representation(
+    resized_kspace: torch.Tensor,
+    *,
+    num_coils: int,
+) -> torch.Tensor:
+    num_coils = _normalize_positive_int("num_coils", num_coils)
+    num_input_coils, height, width, components = resized_kspace.shape
+    if components != 2:
+        raise ValueError(f"Expected real/imag component dimension 2, got {components}")
+    if num_input_coils > num_coils:
+        raise ValueError(
+            f"Input has {num_input_coils} coils, but output was configured for "
+            f"{num_coils} coils."
+        )
+    if num_input_coils == num_coils:
+        return resized_kspace.to(dtype=torch.float32).contiguous()
+
+    padded = torch.zeros(
+        num_coils,
+        height,
+        width,
+        2,
+        dtype=torch.float32,
+        device=resized_kspace.device,
+    )
+    padded[:num_input_coils] = resized_kspace.to(dtype=torch.float32)
+    return padded.contiguous()
+
+
 def _build_kspace_representation(
     raw_kspace: Any,
     *,
@@ -245,7 +317,7 @@ def _build_kspace_representation(
             target_to_uniform_kspace(target, uniform_train_resolution)
         ).unsqueeze(0)
 
-    if representation != DEFAULT_REPRESENTATION:
+    if representation not in (DEFAULT_REPRESENTATION, RAW_COIL_REPRESENTATION):
         raise ValueError(
             f"Unsupported representation: {representation!r}. "
             f"Expected one of {REPRESENTATION_CHOICES}."
@@ -255,6 +327,12 @@ def _build_kspace_representation(
         _raw_kspace_to_tensor(raw_kspace),
         uniform_train_resolution,
     )
+    if representation == RAW_COIL_REPRESENTATION:
+        return _build_raw_coil_representation(
+            resized_kspace,
+            num_coils=num_virtual_coils,
+        )
+
     return _build_virtual_coil_representation(
         resized_kspace,
         num_virtual_coils=num_virtual_coils,
@@ -265,7 +343,7 @@ def _build_kspace_representation(
 def _representation_num_channels(representation: str, num_virtual_coils: int) -> int:
     if representation == "rss_pseudo":
         return 1
-    if representation == DEFAULT_REPRESENTATION:
+    if representation in (DEFAULT_REPRESENTATION, RAW_COIL_REPRESENTATION):
         return _normalize_positive_int("num_virtual_coils", num_virtual_coils)
     raise ValueError(
         f"Unsupported representation: {representation!r}. "

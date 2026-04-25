@@ -9,10 +9,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from data.stanford.stanford_data import StanfordSliceDataset
+from data.fastmri_data import SliceDataset
 
 if __package__ in (None, ""):
-    from fixed_kspace_hierarchy_multi_coil_common import (
+    from fixed_kspace_hierarchy_multi_coil_common_gpu import (
+        CACHE_MODE_CHOICES,
         DEFAULT_CALIBRATION_WINDOW,
         DEFAULT_NUM_VIRTUAL_COILS,
         DEFAULT_REPRESENTATION,
@@ -22,7 +23,8 @@ if __package__ in (None, ""):
         run_hierarchy_job,
     )
 else:
-    from .fixed_kspace_hierarchy_multi_coil_common import (
+    from .fixed_kspace_hierarchy_multi_coil_common_gpu import (
+        CACHE_MODE_CHOICES,
         DEFAULT_CALIBRATION_WINDOW,
         DEFAULT_NUM_VIRTUAL_COILS,
         DEFAULT_REPRESENTATION,
@@ -33,19 +35,19 @@ else:
     )
 
 
-DEFAULT_DATA_ROOT = "/working2/arctic/Recon/stanford_convert/"
+DEFAULT_DATA_ROOT = "/v/ai/nobackup/arctic/public_lowlevel/data/fastMRI/knee/multicoil_train"
 DEFAULT_OUTPUT_PREFIX = (
-    Path(__file__).resolve().parent / "gamma_stanford_multicoil_384_raw"
+    Path(__file__).resolve().parent / "gamma_fastmri_multicoil_384_raw_gpu"
 )
-DEFAULT_TMP_DIR = "/tmp/cov_rank_stanford_multicoil_384"
+DEFAULT_TMP_DIR = "/tmp/cov_rank_fastmri_multicoil_384_gpu"
 
 
 def build_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Compute raw fixed k-space hierarchy statistics for Stanford multi-coil data."
+        description="Compute raw fixed k-space hierarchy statistics for fastMRI multi-coil data on GPU."
     )
     parser.add_argument("--data-root", type=str, default=DEFAULT_DATA_ROOT)
-    parser.add_argument("--num-samples", type=int, default=1024*4)
+    parser.add_argument("--num-samples", type=int, default=1024 * 8)
     parser.add_argument(
         "--uniform-train-resolution", nargs=2, type=int, default=[384, 384]
     )
@@ -53,8 +55,6 @@ def build_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-prefix", type=str, default=str(DEFAULT_OUTPUT_PREFIX)
     )
-    parser.add_argument("--train-val-split", type=float, default=0.8)
-    parser.add_argument("--train-val-seed", type=int, default=0)
     normalize_group = parser.add_mutually_exclusive_group()
     normalize_group.add_argument(
         "--normalize-per-sample",
@@ -81,7 +81,7 @@ def build_args() -> argparse.Namespace:
     )
     parser.add_argument("--tau-ratio", type=float, default=1.0)
     parser.add_argument("--tau-abs", type=float, default=None)
-    parser.add_argument("--block-size-gram", type=int, default=256)
+    parser.add_argument("--block-size-gram", type=int, default=1024)
     parser.add_argument("--block-size-center", type=int, default=512)
     parser.add_argument(
         "--representation",
@@ -95,8 +95,7 @@ def build_args() -> argparse.Namespace:
         default=None,
         help=(
             "Number of output coil channels. Defaults to the maximum available "
-            "coil count in the selected Stanford split for raw/virtual-coil "
-            "representations."
+            "coil count in the fastMRI dataset for raw/virtual-coil representations."
         ),
     )
     parser.add_argument(
@@ -104,16 +103,22 @@ def build_args() -> argparse.Namespace:
         type=int,
         default=DEFAULT_CALIBRATION_WINDOW,
     )
+    parser.add_argument("--device", type=str, default="cuda:0")
+    parser.add_argument(
+        "--cache-mode",
+        type=str,
+        default="auto",
+        choices=CACHE_MODE_CHOICES,
+    )
+    parser.add_argument("--gpu-cache-max-gb", type=float, default=60.0)
     return parser.parse_args()
 
 
 def main() -> None:
     args = build_args()
-    dataset = StanfordSliceDataset(
+    dataset = SliceDataset(
         root=Path(args.data_root),
-        data_partition="train",
-        train_val_split=args.train_val_split,
-        train_val_seed=args.train_val_seed,
+        challenge="multicoil",
         transform=None,
     )
     if args.num_virtual_coils is None and args.representation != "rss_pseudo":
@@ -135,7 +140,7 @@ def main() -> None:
 
     run_hierarchy_job(
         dataset=dataset,
-        dataset_tag="stanford_multicoil_384",
+        dataset_tag="fastmri_multicoil_384_gpu",
         output_prefix=args.output_prefix,
         tmp_dir=args.tmp_dir,
         num_samples=args.num_samples,
@@ -149,13 +154,13 @@ def main() -> None:
         representation=args.representation,
         num_virtual_coils=num_virtual_coils,
         calibration_window=args.calibration_window,
+        device=args.device,
+        cache_mode=args.cache_mode,
+        gpu_cache_max_gb=args.gpu_cache_max_gb,
         metadata={
             "data_root": str(args.data_root),
-            "dataset_name": "stanford",
+            "dataset_name": "fastmri",
             "challenge": "multicoil",
-            "data_partition": "train",
-            "train_val_split": float(args.train_val_split),
-            "train_val_seed": int(args.train_val_seed),
             "source": "reconstruction_rss"
             if args.representation == "rss_pseudo"
             else "raw_kspace",

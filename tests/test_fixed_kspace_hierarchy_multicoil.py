@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 import fastmri
+import h5py
 import numpy as np
 import torch
 
@@ -18,10 +19,12 @@ from data.stanford.stanford_data import StanfordSliceDataset
 from models.center_mask_scheduler import validate_center_mask_schedule
 from utils.fixed_kspace_hierarchy_multi_coil_common import (
     DEFAULT_REPRESENTATION,
+    RAW_COIL_REPRESENTATION,
     _accumulate_shell_gram_inplace,
     _build_kspace_representation,
     _center_gram_inplace,
     _compute_window_gram_direct,
+    infer_max_available_kspace_coils,
     _materialize_window_gram,
     run_hierarchy_job,
 )
@@ -131,6 +134,76 @@ class TestVirtualCoilRepresentation(unittest.TestCase):
         )
 
         self.assertTrue(bool(torch.allclose(represented_a, represented_b, atol=1e-6)))
+
+
+class TestRawCoilRepresentation(unittest.TestCase):
+    def test_raw_coil_representation_preserves_coil_order_and_pads(self):
+        raw_kspace = _make_multicoil_kspace(3)
+
+        represented = _build_kspace_representation(
+            torch.view_as_complex(raw_kspace.contiguous()),
+            target=None,
+            uniform_train_resolution=(16, 16),
+            representation=RAW_COIL_REPRESENTATION,
+            num_virtual_coils=5,
+            calibration_window=8,
+        )
+
+        self.assertEqual(tuple(represented.shape), (5, 16, 16, 2))
+        self.assertTrue(bool(torch.allclose(represented[:3], raw_kspace, atol=1e-5)))
+        self.assertTrue(
+            bool(torch.allclose(represented[3:], torch.zeros_like(represented[3:]), atol=1e-6))
+        )
+
+
+class TestMaxAvailableCoilInference(unittest.TestCase):
+    def test_stanford_dataset_uses_largest_hdf5_coil_dimension(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            for fname, num_coils in (("a.h5", 3), ("b.h5", 5)):
+                with h5py.File(root / fname, "w") as hf:
+                    hf.create_dataset(
+                        "kspace",
+                        data=np.zeros((2, num_coils, 8, 8), dtype=np.complex64),
+                    )
+                    hf.create_dataset(
+                        "reconstruction_rss",
+                        data=np.zeros((2, 8, 8), dtype=np.float32),
+                    )
+
+            dataset = StanfordSliceDataset(
+                root=root,
+                data_partition="train",
+                train_val_split=1.0,
+                train_val_seed=0,
+                transform=None,
+            )
+
+            self.assertEqual(infer_max_available_kspace_coils(dataset), 5)
+
+    def test_adjacent_slices_expand_effective_coil_count(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            with h5py.File(root / "sample.h5", "w") as hf:
+                hf.create_dataset(
+                    "kspace",
+                    data=np.zeros((4, 3, 8, 8), dtype=np.complex64),
+                )
+                hf.create_dataset(
+                    "reconstruction_rss",
+                    data=np.zeros((4, 8, 8), dtype=np.float32),
+                )
+
+            dataset = StanfordSliceDataset(
+                root=root,
+                data_partition="train",
+                train_val_split=1.0,
+                train_val_seed=0,
+                transform=None,
+                num_adj_slices=3,
+            )
+
+            self.assertEqual(infer_max_available_kspace_coils(dataset), 9)
 
 
 class TestShellIncrementalGram(unittest.TestCase):
@@ -272,4 +345,3 @@ class TestStanfordHierarchySmoke(unittest.TestCase, _HierarchySmokeMixin):
             transform=None,
         )
         self._assert_hierarchy_job_smoke(dataset, "stanford_smoke")
-
