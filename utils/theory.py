@@ -323,7 +323,7 @@ def _parse_args() -> argparse.Namespace:
         description="Generate theory-based multi-coil 384 center-mask schedules from raw info logs."
     )
     parser.add_argument("--info-file", type=str, required=True)
-    parser.add_argument("--acs-size", type=int, default=16)
+    parser.add_argument("--acs-size", type=int, default=14)
     parser.add_argument("--num-blocks", type=int, default=8)
     parser.add_argument("--ratio-base", type=float, default=0.5)
     parser.add_argument("--shell-power", type=float, default=1)
