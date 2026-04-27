@@ -102,6 +102,19 @@ def _estimate_cache_nbytes(
     return int(num_samples) * int(num_channels) * int(height) * int(width) * 2 * 4
 
 
+def _estimate_grouped_cache_nbytes(
+    sample_groups: Mapping[int, Sequence[int]],
+    height: int,
+    width: int,
+) -> int:
+    return int(
+        sum(
+            len(sample_indices) * int(num_coils) * int(height) * int(width) * 2 * 4
+            for num_coils, sample_indices in sample_groups.items()
+        )
+    )
+
+
 def _resolve_cache_mode(
     cache_mode: str,
     *,
@@ -311,6 +324,158 @@ def _build_kspace_representation(
         resized_kspace,
         num_virtual_coils=num_virtual_coils,
         calibration_window=calibration_window,
+    )
+
+
+def _build_unpadded_raw_coil_representation(
+    raw_kspace: Any,
+    *,
+    uniform_train_resolution: Sequence[int],
+    device: str | torch.device,
+) -> torch.Tensor:
+    resized_kspace = _resize_kspace_to_uniform_resolution(
+        _raw_kspace_to_tensor(raw_kspace, device=device),
+        uniform_train_resolution,
+    )
+    if resized_kspace.ndim != 4 or resized_kspace.shape[-1] != 2:
+        raise ValueError(
+            "Expected resized raw k-space with shape [coils, H, W, 2], "
+            f"got {tuple(resized_kspace.shape)}"
+        )
+    return resized_kspace.to(dtype=torch.float32).contiguous()
+
+
+def _raw_kspace_num_coils(
+    raw_kspace: Any,
+    *,
+    device: str | torch.device,
+) -> int:
+    return int(_raw_kspace_to_tensor(raw_kspace, device=device).shape[0])
+
+
+def _collect_raw_coil_sample_groups(
+    dataset,
+    num_samples: int,
+    *,
+    device: str | torch.device,
+) -> Dict[int, list[int]]:
+    sample_groups: Dict[int, list[int]] = {}
+    with torch.no_grad():
+        for idx in tqdm(range(num_samples), desc="Grouping samples by raw coil count"):
+            sample = dataset[idx]
+            raw_kspace = sample[0]
+            num_coils = _raw_kspace_num_coils(raw_kspace, device=device)
+            sample_groups.setdefault(num_coils, []).append(idx)
+
+    if not sample_groups:
+        raise ValueError("Could not build raw-coil sample groups from an empty dataset.")
+    return dict(sorted(sample_groups.items()))
+
+
+def _load_grouped_raw_coil_kspace_caches(
+    dataset,
+    num_samples: int,
+    cache_path: os.PathLike[str] | str,
+    uniform_train_resolution: Sequence[int],
+    *,
+    device: str | torch.device,
+    cache_mode: str,
+    gpu_cache_max_gb: float,
+) -> Tuple[
+    Dict[int, torch.Tensor | np.memmap],
+    Dict[int, list[int]],
+    str,
+    list[Path],
+    float,
+]:
+    device_obj = _ensure_cuda_device(device)
+    height, width = _normalize_resolution(uniform_train_resolution)
+    sample_groups = _collect_raw_coil_sample_groups(
+        dataset,
+        num_samples,
+        device=device_obj,
+    )
+    estimated_cache_nbytes = _estimate_grouped_cache_nbytes(sample_groups, height, width)
+    resolved_cache_mode = _resolve_cache_mode(
+        cache_mode,
+        estimated_cache_nbytes=estimated_cache_nbytes,
+        gpu_cache_max_gb=gpu_cache_max_gb,
+        device=device_obj,
+    )
+
+    group_summary = ", ".join(
+        f"{num_coils}c:{len(sample_indices)}"
+        for num_coils, sample_indices in sample_groups.items()
+    )
+    print(
+        f"[*] Raw-coil grouping enabled; sample groups by real coil count: "
+        f"{group_summary}"
+    )
+    print(
+        f"[*] Caching grouped raw k-space without coil padding to "
+        f"{resolved_cache_mode} cache (estimated={_bytes_to_gb(estimated_cache_nbytes):.2f} GB)"
+    )
+
+    grouped_caches: Dict[int, torch.Tensor | np.memmap] = {}
+    cache_paths: list[Path] = []
+    cache_path_obj = Path(cache_path)
+    for num_coils, sample_indices in sample_groups.items():
+        shape = (len(sample_indices), num_coils, height, width, 2)
+        if resolved_cache_mode == "gpu":
+            grouped_caches[num_coils] = torch.empty(
+                shape,
+                dtype=torch.float32,
+                device=device_obj,
+            )
+        else:
+            group_cache_path = cache_path_obj.with_name(
+                f"{cache_path_obj.stem}_coils{num_coils}{cache_path_obj.suffix}"
+            )
+            cache_paths.append(group_cache_path)
+            grouped_caches[num_coils] = np.memmap(
+                group_cache_path,
+                mode="w+",
+                dtype=np.float32,
+                shape=shape,
+            )
+
+    with torch.no_grad():
+        for num_coils, sample_indices in sample_groups.items():
+            group_cache = grouped_caches[num_coils]
+            for local_idx, dataset_idx in enumerate(
+                tqdm(sample_indices, desc=f"Caching raw {num_coils}-coil group")
+            ):
+                sample = dataset[dataset_idx]
+                represented = _build_unpadded_raw_coil_representation(
+                    sample[0],
+                    uniform_train_resolution=(height, width),
+                    device=device_obj,
+                )
+                expected_shape = (num_coils, height, width, 2)
+                if tuple(represented.shape) != expected_shape:
+                    raise ValueError(
+                        f"Expected unpadded raw k-space shape {expected_shape}, "
+                        f"got {tuple(represented.shape)}"
+                    )
+
+                if isinstance(group_cache, torch.Tensor):
+                    group_cache[local_idx].copy_(represented)
+                else:
+                    group_cache[local_idx] = (
+                        represented.detach().cpu().numpy().astype(np.float32)
+                    )
+
+    _synchronize(device_obj)
+    for group_cache in grouped_caches.values():
+        if isinstance(group_cache, np.memmap):
+            group_cache.flush()
+
+    return (
+        grouped_caches,
+        sample_groups,
+        resolved_cache_mode,
+        cache_paths,
+        _bytes_to_gb(estimated_cache_nbytes),
     )
 
 
@@ -593,6 +758,175 @@ def _spectral_stats_from_centered_gram(
     )
 
 
+def _calc_grouped_raw_coil_cov_effective_rank_sizes(
+    dataset,
+    tmp_dir: os.PathLike[str] | str,
+    num_samples: int,
+    window_list: Sequence[int],
+    uniform_train_resolution: Sequence[int],
+    *,
+    block_size_gram: int,
+    block_size_center: int,
+    normalize_per_sample: bool,
+    tau_mode: str,
+    tau_ratio: float,
+    tau_abs: Optional[float],
+    device: torch.device,
+    cache_mode: str,
+    gpu_cache_max_gb: float,
+) -> Dict[str, Any]:
+    cache_path = Path(tmp_dir) / f"kspace_cache_{num_samples}_grouped_raw_gpu.dat"
+    (
+        grouped_caches,
+        sample_groups,
+        resolved_cache_mode,
+        cache_file_paths,
+        represented_cache_gb,
+    ) = _load_grouped_raw_coil_kspace_caches(
+        dataset=dataset,
+        num_samples=num_samples,
+        cache_path=cache_path,
+        uniform_train_resolution=uniform_train_resolution,
+        device=device,
+        cache_mode=cache_mode,
+        gpu_cache_max_gb=gpu_cache_max_gb,
+    )
+
+    group_states: Dict[int, Dict[str, torch.Tensor]] = {}
+    for num_coils, sample_indices in sample_groups.items():
+        group_size = len(sample_indices)
+        group_states[num_coils] = {
+            "cumulative_gram": torch.zeros(
+                (group_size, group_size),
+                dtype=torch.float64,
+                device=device,
+            ),
+            "cumulative_norm_sq": torch.zeros(
+                group_size,
+                dtype=torch.float64,
+                device=device,
+            ),
+        }
+
+    group_counts = {
+        str(num_coils): int(len(sample_indices))
+        for num_coils, sample_indices in sample_groups.items()
+    }
+    group_weights = {
+        str(num_coils): float(len(sample_indices) / max(num_samples, 1))
+        for num_coils, sample_indices in sample_groups.items()
+    }
+
+    r_eff_by_window: Dict[int, float] = {}
+    eigvals_cov_by_window: Dict[int, np.ndarray] = {}
+    per_group_r_eff_by_window: Dict[str, Dict[str, float]] = {
+        str(num_coils): {} for num_coils in sample_groups
+    }
+
+    try:
+        with torch.no_grad():
+            for window_size in window_list:
+                weighted_r_eff = 0.0
+                scaled_eig_chunks: list[np.ndarray] = []
+
+                for num_coils, group_cache in grouped_caches.items():
+                    group_size = len(sample_groups[num_coils])
+                    group_weight = group_size / max(num_samples, 1)
+                    state = group_states[num_coils]
+                    _accumulate_shell_gram_inplace(
+                        group_cache,
+                        cumulative_gram=state["cumulative_gram"],
+                        cumulative_norm_sq=state["cumulative_norm_sq"],
+                        window_size=window_size,
+                        block_size=block_size_gram,
+                        device=device,
+                    )
+
+                    gram = _materialize_window_gram(
+                        state["cumulative_gram"],
+                        state["cumulative_norm_sq"],
+                        normalize_per_sample=normalize_per_sample,
+                        block_size=block_size_center,
+                    )
+                    gram = _center_gram_inplace(gram, block_size=block_size_center)
+
+                    r_eff, eigvals_gram, eigvals_cov = _spectral_stats_from_centered_gram(
+                        gram,
+                        n_samples=group_size,
+                    )
+                    weighted_r_eff += group_weight * r_eff
+                    per_group_r_eff_by_window[str(num_coils)][str(window_size)] = r_eff
+
+                    if eigvals_cov.size > 0:
+                        scaled_eig_chunks.append(
+                            np.asarray(eigvals_cov, dtype=np.float64) * group_weight
+                        )
+
+                    print(
+                        f"[CovRank:raw-group] coils={num_coils:3d} | "
+                        f"window={window_size:3d}x{window_size:<3d} | "
+                        f"n={group_size:5d} | r_eff={r_eff:10.4f} | "
+                        f"nonzero_eigs={len(eigvals_cov)}"
+                    )
+
+                    del gram, eigvals_gram
+                    gc.collect()
+
+                r_eff_by_window[window_size] = weighted_r_eff
+                if scaled_eig_chunks:
+                    eigvals_cov_by_window[window_size] = np.concatenate(scaled_eig_chunks)
+                else:
+                    eigvals_cov_by_window[window_size] = np.empty(0, dtype=np.float64)
+
+                print(
+                    f"[CovRank:raw-group] window={window_size:3d}x{window_size:<3d} | "
+                    f"weighted_r_eff={weighted_r_eff:10.4f} | "
+                    f"aggregated_eigs={len(eigvals_cov_by_window[window_size])}"
+                )
+
+        tau = _estimate_tau(
+            eigvals_cov_by_window=eigvals_cov_by_window,
+            window_list=window_list,
+            tau_mode=tau_mode,
+            tau_ratio=tau_ratio,
+            tau_abs=tau_abs,
+        )
+        info_by_window = {
+            window: _gaussian_info_from_cov_eigs(eigvals_cov_by_window[window], tau=tau)
+            for window in window_list
+        }
+        windows, infos, deltas = _compute_delta_infos(info_by_window)
+        return {
+            "r_eff_by_window": r_eff_by_window,
+            "info_by_window": info_by_window,
+            "windows": windows,
+            "infos": infos,
+            "delta_infos": deltas,
+            "tau": tau,
+            "num_samples": num_samples,
+            "cache_mode": resolved_cache_mode,
+            "represented_cache_gb": represented_cache_gb,
+            "peak_cuda_memory_gb": _peak_cuda_memory_gb(device),
+            "device": str(device),
+            "raw_coil_grouping": True,
+            "raw_coil_group_counts": group_counts,
+            "raw_coil_group_weights": group_weights,
+            "raw_coil_group_aggregation": "sample_weighted_block_spectrum",
+            "raw_coil_group_r_eff_by_window": per_group_r_eff_by_window,
+        }
+    finally:
+        for state in group_states.values():
+            state.clear()
+        grouped_caches.clear()
+        gc.collect()
+        torch.cuda.empty_cache()
+        for cache_file_path in cache_file_paths:
+            try:
+                cache_file_path.unlink()
+            except OSError:
+                pass
+
+
 def calc_cov_effective_rank_sizes(
     dataset,
     tmp_dir: os.PathLike[str] | str,
@@ -611,6 +945,7 @@ def calc_cov_effective_rank_sizes(
     device: str = "cuda:0",
     cache_mode: str = "auto",
     gpu_cache_max_gb: float = 60.0,
+    group_raw_coils: bool = False,
 ) -> Dict[str, Any]:
     device_obj = _ensure_cuda_device(device)
     tmp_dir = Path(tmp_dir)
@@ -638,6 +973,30 @@ def calc_cov_effective_rank_sizes(
 
     with torch.cuda.device(device_obj):
         torch.cuda.reset_peak_memory_stats()
+
+    if group_raw_coils and representation == RAW_COIL_REPRESENTATION:
+        return _calc_grouped_raw_coil_cov_effective_rank_sizes(
+            dataset=dataset,
+            tmp_dir=tmp_dir,
+            num_samples=num_samples,
+            window_list=window_list,
+            uniform_train_resolution=uniform_train_resolution,
+            block_size_gram=block_size_gram,
+            block_size_center=block_size_center,
+            normalize_per_sample=normalize_per_sample,
+            tau_mode=tau_mode,
+            tau_ratio=tau_ratio,
+            tau_abs=tau_abs,
+            device=device_obj,
+            cache_mode=cache_mode,
+            gpu_cache_max_gb=gpu_cache_max_gb,
+        )
+    if group_raw_coils:
+        warnings.warn(
+            "group_raw_coils=True is only used with representation='raw_coil'; "
+            f"got representation={representation!r}. Falling back to the fixed-shape path.",
+            stacklevel=2,
+        )
 
     cache_path = tmp_dir / f"kspace_cache_{num_samples}_gpu.dat"
     kspace_cache, resolved_cache_mode, cache_file_path, represented_cache_gb = _load_centered_kspace_cache(
@@ -755,6 +1114,7 @@ def run_hierarchy_job(
     device: str = "cuda:0",
     cache_mode: str = "auto",
     gpu_cache_max_gb: float = 60.0,
+    group_raw_coils: bool = False,
 ) -> Dict[str, Any]:
     device_obj = _ensure_cuda_device(device)
     uniform_train_resolution = _normalize_resolution(uniform_train_resolution)
@@ -771,6 +1131,8 @@ def run_hierarchy_job(
         f"[*] Representation: {representation} | num_virtual_coils={num_virtual_coils} "
         f"| calibration_window={calibration_window}"
     )
+    if representation == RAW_COIL_REPRESENTATION:
+        print(f"[*] Raw coil grouping without padding: {bool(group_raw_coils)}")
     print(
         f"[*] Device: {device_obj} | cache_mode={cache_mode} | "
         f"gpu_cache_max_gb={float(gpu_cache_max_gb):.1f}"
@@ -794,6 +1156,7 @@ def run_hierarchy_job(
         device=str(device_obj),
         cache_mode=cache_mode,
         gpu_cache_max_gb=gpu_cache_max_gb,
+        group_raw_coils=group_raw_coils,
     )
 
     runtime_metadata = dict(metadata or {})
@@ -806,6 +1169,15 @@ def run_hierarchy_job(
             "peak_cuda_memory_gb": float(results["peak_cuda_memory_gb"]),
         }
     )
+    if results.get("raw_coil_grouping"):
+        runtime_metadata.update(
+            {
+                "raw_coil_grouping": True,
+                "raw_coil_group_counts": results["raw_coil_group_counts"],
+                "raw_coil_group_weights": results["raw_coil_group_weights"],
+                "raw_coil_group_aggregation": results["raw_coil_group_aggregation"],
+            }
+        )
 
     _write_text_log(
         text_path=text_path,

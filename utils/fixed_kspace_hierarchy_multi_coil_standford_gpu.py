@@ -107,11 +107,32 @@ def build_args() -> argparse.Namespace:
         default=DEFAULT_CALIBRATION_WINDOW,
     )
     parser.add_argument("--device", type=str, default="cuda:0")
+    raw_grouping = parser.add_mutually_exclusive_group()
+    raw_grouping.add_argument(
+        "--group-raw-coils",
+        dest="group_raw_coils",
+        action="store_true",
+        help=(
+            "For raw_coil representation, group samples by their real coil count "
+            "and compute each group without channel padding."
+        ),
+    )
+    raw_grouping.add_argument(
+        "--no-group-raw-coils",
+        dest="group_raw_coils",
+        action="store_false",
+        help="Use the legacy fixed-channel raw_coil path with zero padding.",
+    )
+    parser.set_defaults(group_raw_coils=True)
     parser.add_argument(
         "--cache-mode",
         type=str,
-        default="auto",
+        default="gpu",
         choices=CACHE_MODE_CHOICES,
+        help=(
+            "Where to store the represented k-space cache. Defaults to GPU for "
+            "this GPU entry point; use 'auto' to allow fallback to CPU streaming."
+        ),
     )
     parser.add_argument("--gpu-cache-max-gb", type=float, default=60.0)
     return parser.parse_args()
@@ -129,10 +150,16 @@ def main() -> None:
     if args.num_virtual_coils is None and args.representation != "rss_pseudo":
         num_virtual_coils = infer_max_available_kspace_coils(dataset)
         num_virtual_coils_source = "max_available_kspace_coils"
-        print(
-            "[*] Auto output coil channels from max available k-space coils: "
-            f"{num_virtual_coils}"
-        )
+        if args.representation == RAW_COIL_REPRESENTATION and args.group_raw_coils:
+            print(
+                "[*] Auto max raw coil count for metadata/legacy fallback: "
+                f"{num_virtual_coils}"
+            )
+        else:
+            print(
+                "[*] Auto output coil channels from max available k-space coils: "
+                f"{num_virtual_coils}"
+            )
     else:
         num_virtual_coils = (
             DEFAULT_NUM_VIRTUAL_COILS
@@ -162,6 +189,7 @@ def main() -> None:
         device=args.device,
         cache_mode=args.cache_mode,
         gpu_cache_max_gb=args.gpu_cache_max_gb,
+        group_raw_coils=bool(args.group_raw_coils),
         metadata={
             "data_root": str(args.data_root),
             "dataset_name": "stanford",
@@ -177,6 +205,7 @@ def main() -> None:
             "num_coils": int(num_virtual_coils),
             "num_virtual_coils_source": num_virtual_coils_source,
             "calibration_window": int(args.calibration_window),
+            "raw_coil_grouping_requested": bool(args.group_raw_coils),
         },
     )
 

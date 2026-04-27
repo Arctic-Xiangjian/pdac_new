@@ -72,6 +72,25 @@ def _make_multicoil_kspace(num_coils: int, height: int = 16, width: int = 16) ->
     return fastmri.fft2c(torch.view_as_real(coil_images))
 
 
+class _VariableCoilDataset:
+    def __init__(self, coil_counts, height: int = 16, width: int = 16):
+        self.height = height
+        self.width = width
+        self.samples = [
+            torch.view_as_complex(
+                _make_multicoil_kspace(num_coils, height=height, width=width).contiguous()
+            )
+            for num_coils in coil_counts
+        ]
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx: int):
+        target = np.zeros((self.height, self.width), dtype=np.float32)
+        return self.samples[idx], None, target, {}, f"synthetic_{idx}.h5", idx
+
+
 @unittest.skipUnless(CUDA_AVAILABLE, "CUDA is unavailable")
 class TestGPUVirtualCoilRepresentation(unittest.TestCase):
     def test_gpu_representation_has_fixed_shape_and_zero_padding(self):
@@ -193,6 +212,68 @@ class TestGPUShellGram(unittest.TestCase):
                 atol=1e-8,
                 rtol=1e-6,
             )
+
+
+@unittest.skipUnless(CUDA_AVAILABLE, "CUDA is unavailable")
+class TestGPURawCoilGrouping(unittest.TestCase):
+    def test_grouped_raw_cache_keeps_native_coil_shapes_without_padding(self):
+        dataset = _VariableCoilDataset([3, 5, 3, 5])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            grouped_caches, sample_groups, cache_mode, cache_paths, _ = (
+                gpu_common._load_grouped_raw_coil_kspace_caches(
+                    dataset=dataset,
+                    num_samples=4,
+                    cache_path=Path(tmpdir) / "grouped_cache.dat",
+                    uniform_train_resolution=(16, 16),
+                    device=CUDA_DEVICE,
+                    cache_mode="gpu",
+                    gpu_cache_max_gb=60.0,
+                )
+            )
+
+            self.assertEqual(sample_groups, {3: [0, 2], 5: [1, 3]})
+            self.assertEqual(cache_mode, "gpu")
+            self.assertEqual(cache_paths, [])
+            self.assertEqual(tuple(grouped_caches[3].shape), (2, 3, 16, 16, 2))
+            self.assertEqual(tuple(grouped_caches[5].shape), (2, 5, 16, 16, 2))
+            self.assertGreater(float(grouped_caches[3][:, -1].abs().sum().item()), 0.0)
+            self.assertGreater(float(grouped_caches[5][:, -1].abs().sum().item()), 0.0)
+
+            del grouped_caches
+            torch.cuda.empty_cache()
+
+    def test_grouped_raw_hierarchy_writes_group_metadata(self):
+        dataset = _VariableCoilDataset([3, 5, 3, 5])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            result = gpu_common.run_hierarchy_job(
+                dataset=dataset,
+                dataset_tag="variable_coil_grouped_gpu",
+                output_prefix=tmpdir_path / "variable_coil_grouped_gpu",
+                tmp_dir=tmpdir_path / "scratch",
+                num_samples=4,
+                uniform_train_resolution=(16, 16),
+                normalize_per_sample=True,
+                representation=gpu_common.RAW_COIL_REPRESENTATION,
+                num_virtual_coils=5,
+                calibration_window=8,
+                device=CUDA_DEVICE,
+                cache_mode="gpu",
+                gpu_cache_max_gb=60.0,
+                group_raw_coils=True,
+                metadata={"source": "raw_kspace"},
+            )
+
+            payload = json.loads(Path(result["json_path"]).read_text(encoding="utf-8"))
+            self.assertTrue(payload["metadata"]["raw_coil_grouping"])
+            self.assertEqual(payload["metadata"]["raw_coil_group_counts"], {"3": 2, "5": 2})
+            self.assertEqual(
+                payload["metadata"]["raw_coil_group_aggregation"],
+                "sample_weighted_block_spectrum",
+            )
+            self.assertTrue(bool(np.all(np.diff(payload["infos"]) >= -1e-10)))
 
 
 class _GPUHierarchySmokeMixin:
